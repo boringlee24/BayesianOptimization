@@ -5,9 +5,14 @@ from .event import Events, DEFAULT_EVENTS
 from .logger import _get_default_logger
 from .util import UtilityFunction, acq_max, ensure_rng
 
-from sklearn.gaussian_process.kernels import Matern
+from sklearn.gaussian_process.kernels import Matern, RBF, RationalQuadratic, ExpSineSquared
 from sklearn.gaussian_process import GaussianProcessRegressor
-
+import numpy as np
+from sklearn.gaussian_process.kernels import _check_length_scale
+from scipy.spatial.distance import pdist, cdist, squareform
+from scipy.special import kv, gamma
+import math
+import pdb
 
 class Queue:
     def __init__(self):
@@ -61,7 +66,168 @@ class Observable(object):
         for _, callback in self.get_subscribers(event).items():
             callback(event, self)
 
+def new_Matern(self, X, Y=None, eval_gradient=False):
+    """Return the kernel k(X, Y) and optionally its gradient.
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples_X, n_features)
+        Left argument of the returned kernel k(X, Y)
+    Y : ndarray of shape (n_samples_Y, n_features), default=None
+        Right argument of the returned kernel k(X, Y). If None, k(X, X)
+        if evaluated instead.
+    eval_gradient : bool, default=False
+        Determines whether the gradient with respect to the log of
+        the kernel hyperparameter is computed.
+        Only supported when Y is None.
+    Returns
+    -------
+    K : ndarray of shape (n_samples_X, n_samples_Y)
+        Kernel k(X, Y)
+    K_gradient : ndarray of shape (n_samples_X, n_samples_X, n_dims), \
+            optional
+        The gradient of the kernel k(X, X) with respect to the log of the
+        hyperparameter of the kernel. Only returned when `eval_gradient`
+        is True.
+    """
+    X = np.atleast_2d(X)
+    X = np.round(X)
+    length_scale = _check_length_scale(X, self.length_scale)
+    if Y is None:
+        dists = pdist(X / length_scale, metric='euclidean')
+    else:
+        if eval_gradient:
+            raise ValueError(
+                "Gradient can only be evaluated when Y is None.")
+        dists = cdist(X / length_scale, Y / length_scale,
+                      metric='euclidean')
 
+    if self.nu == 0.5:
+        K = np.exp(-dists)
+    elif self.nu == 1.5:
+        K = dists * math.sqrt(3)
+        K = (1. + K) * np.exp(-K)
+    elif self.nu == 2.5:
+        K = dists * math.sqrt(5)
+        K = (1. + K + K ** 2 / 3.0) * np.exp(-K)
+    elif self.nu == np.inf:
+        K = np.exp(-dists ** 2 / 2.0)
+    else:  # general case; expensive to evaluate
+        K = dists
+        K[K == 0.0] += np.finfo(float).eps  # strict zeros result in nan
+        tmp = (math.sqrt(2 * self.nu) * K)
+        K.fill((2 ** (1. - self.nu)) / gamma(self.nu))
+        K *= tmp ** self.nu
+        K *= kv(self.nu, tmp)
+
+    if Y is None:
+        # convert from upper-triangular matrix to square matrix
+        K = squareform(K)
+        np.fill_diagonal(K, 1)
+
+    if eval_gradient:
+        if self.hyperparameter_length_scale.fixed:
+            # Hyperparameter l kept fixed
+            K_gradient = np.empty((X.shape[0], X.shape[0], 0))
+            return K, K_gradient
+
+        # We need to recompute the pairwise dimension-wise distances
+        if self.anisotropic:
+            D = (X[:, np.newaxis, :] - X[np.newaxis, :, :])**2 \
+                / (length_scale ** 2)
+        else:
+            D = squareform(dists**2)[:, :, np.newaxis]
+
+        if self.nu == 0.5:
+            K_gradient = K[..., np.newaxis] * D \
+                / np.sqrt(D.sum(2))[:, :, np.newaxis]
+            K_gradient[~np.isfinite(K_gradient)] = 0
+        elif self.nu == 1.5:
+            K_gradient = \
+                3 * D * np.exp(-np.sqrt(3 * D.sum(-1)))[..., np.newaxis]
+        elif self.nu == 2.5:
+            tmp = np.sqrt(5 * D.sum(-1))[..., np.newaxis]
+            K_gradient = 5.0 / 3.0 * D * (tmp + 1) * np.exp(-tmp)
+        elif self.nu == np.inf:
+            K_gradient = D * K[..., np.newaxis]
+        else:
+            # approximate gradient numerically
+            def f(theta):  # helper function
+                return self.clone_with_theta(theta)(X, Y)
+            return K, _approx_fprime(self.theta, f, 1e-10)
+
+        if not self.anisotropic:
+            return K, K_gradient[:, :].sum(-1)[:, :, np.newaxis]
+        else:
+            return K, K_gradient
+    else:
+        return K 
+Matern.__call__ = new_Matern
+
+def new_RBF(self, X, Y=None, eval_gradient=False):
+    """Return the kernel k(X, Y) and optionally its gradient.
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples_X, n_features)
+        Left argument of the returned kernel k(X, Y)
+    Y : ndarray of shape (n_samples_Y, n_features), default=None
+        Right argument of the returned kernel k(X, Y). If None, k(X, X)
+        if evaluated instead.
+    eval_gradient : bool, default=False
+        Determines whether the gradient with respect to the log of
+        the kernel hyperparameter is computed.
+        Only supported when Y is None.
+    Returns
+    -------
+    K : ndarray of shape (n_samples_X, n_samples_Y)
+        Kernel k(X, Y)
+    K_gradient : ndarray of shape (n_samples_X, n_samples_X, n_dims), \
+            optional
+        The gradient of the kernel k(X, X) with respect to the log of the
+        hyperparameter of the kernel. Only returned when `eval_gradient`
+        is True.
+    """
+    X = np.atleast_2d(X)
+    if 8.2 in X or 11.4 in X:
+        pdb.set_trace()
+
+    X = np.round(X)
+
+    length_scale = _check_length_scale(X, self.length_scale)
+    if Y is None:
+        dists = pdist(X / length_scale, metric='sqeuclidean')
+        K = np.exp(-.5 * dists)
+        # convert from upper-triangular matrix to square matrix
+        K = squareform(K)
+        np.fill_diagonal(K, 1)
+    else:
+        if eval_gradient:
+            raise ValueError(
+                "Gradient can only be evaluated when Y is None.")
+        dists = cdist(X / length_scale, Y / length_scale,
+                      metric='sqeuclidean')
+        K = np.exp(-.5 * dists)
+
+    if eval_gradient:
+        if self.hyperparameter_length_scale.fixed:
+            # Hyperparameter l kept fixed
+            return K, np.empty((X.shape[0], X.shape[0], 0))
+        elif not self.anisotropic or length_scale.shape[0] == 1:
+            K_gradient = \
+                (K * squareform(dists))[:, :, np.newaxis]
+            return K, K_gradient
+        elif self.anisotropic:
+            # We need to recompute the pairwise dimension-wise distances
+            K_gradient = (X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2 \
+                / (length_scale ** 2)
+            K_gradient *= K[..., np.newaxis]
+            return K, K_gradient
+    else:
+        return K
+
+RBF.__call__ = new_RBF
+
+custom_kernel = 1.0 * RBF(length_scale=1.0, length_scale_bounds=(1e-1, 10.0))
+#custom_kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(1e-1, 10.0), nu=1.5) 
 class BayesianOptimization(Observable):
     """
     This class takes the function to optimize as well as the parameters bounds
@@ -112,12 +278,15 @@ class BayesianOptimization(Observable):
         self._queue = Queue()
 
         # Internal GP regressor
+#        self._gp = GaussianProcessRegressor(
+#            kernel=Matern(nu=2.5),
+#            alpha=1e-6,
+#            normalize_y=False,
+#            n_restarts_optimizer=0,
+#            random_state=self._random_state,
+#        )
         self._gp = GaussianProcessRegressor(
-            kernel=Matern(nu=2.5),
-            alpha=1e-6,
-            normalize_y=True,
-            n_restarts_optimizer=5,
-            random_state=self._random_state,
+            kernel=custom_kernel
         )
 
         self._verbose = verbose
