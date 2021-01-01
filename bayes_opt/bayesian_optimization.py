@@ -67,30 +67,11 @@ class Observable(object):
             callback(event, self)
 
 def new_Matern(self, X, Y=None, eval_gradient=False):
-    """Return the kernel k(X, Y) and optionally its gradient.
-    Parameters
-    ----------
-    X : ndarray of shape (n_samples_X, n_features)
-        Left argument of the returned kernel k(X, Y)
-    Y : ndarray of shape (n_samples_Y, n_features), default=None
-        Right argument of the returned kernel k(X, Y). If None, k(X, X)
-        if evaluated instead.
-    eval_gradient : bool, default=False
-        Determines whether the gradient with respect to the log of
-        the kernel hyperparameter is computed.
-        Only supported when Y is None.
-    Returns
-    -------
-    K : ndarray of shape (n_samples_X, n_samples_Y)
-        Kernel k(X, Y)
-    K_gradient : ndarray of shape (n_samples_X, n_samples_X, n_dims), \
-            optional
-        The gradient of the kernel k(X, X) with respect to the log of the
-        hyperparameter of the kernel. Only returned when `eval_gradient`
-        is True.
-    """
     X = np.atleast_2d(X)
     X = np.round(X)
+    if Y is not None:
+        Y = np.round(Y)
+
     length_scale = _check_length_scale(X, self.length_scale)
     if Y is None:
         dists = pdist(X / length_scale, metric='euclidean')
@@ -164,33 +145,10 @@ def new_Matern(self, X, Y=None, eval_gradient=False):
 Matern.__call__ = new_Matern
 
 def new_RBF(self, X, Y=None, eval_gradient=False):
-    """Return the kernel k(X, Y) and optionally its gradient.
-    Parameters
-    ----------
-    X : ndarray of shape (n_samples_X, n_features)
-        Left argument of the returned kernel k(X, Y)
-    Y : ndarray of shape (n_samples_Y, n_features), default=None
-        Right argument of the returned kernel k(X, Y). If None, k(X, X)
-        if evaluated instead.
-    eval_gradient : bool, default=False
-        Determines whether the gradient with respect to the log of
-        the kernel hyperparameter is computed.
-        Only supported when Y is None.
-    Returns
-    -------
-    K : ndarray of shape (n_samples_X, n_samples_Y)
-        Kernel k(X, Y)
-    K_gradient : ndarray of shape (n_samples_X, n_samples_X, n_dims), \
-            optional
-        The gradient of the kernel k(X, X) with respect to the log of the
-        hyperparameter of the kernel. Only returned when `eval_gradient`
-        is True.
-    """
     X = np.atleast_2d(X)
-    if 8.2 in X or 11.4 in X:
-        pdb.set_trace()
-
     X = np.round(X)
+    if Y is not None:
+        Y = np.round(Y)
 
     length_scale = _check_length_scale(X, self.length_scale)
     if Y is None:
@@ -278,16 +236,16 @@ class BayesianOptimization(Observable):
         self._queue = Queue()
 
         # Internal GP regressor
-#        self._gp = GaussianProcessRegressor(
-#            kernel=Matern(nu=2.5),
-#            alpha=1e-6,
-#            normalize_y=False,
-#            n_restarts_optimizer=0,
-#            random_state=self._random_state,
-#        )
         self._gp = GaussianProcessRegressor(
-            kernel=custom_kernel
+            kernel=Matern(nu=2.5),
+            alpha=1e-6,
+            normalize_y=False,
+            n_restarts_optimizer=0,
+            random_state=self._random_state,
         )
+#        self._gp = GaussianProcessRegressor(
+#            kernel=custom_kernel
+#        )
 
         self._verbose = verbose
         self._bounds_transformer = bounds_transformer
