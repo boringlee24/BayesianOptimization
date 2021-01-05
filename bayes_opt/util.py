@@ -2,7 +2,7 @@ import warnings
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import minimize
-
+import pdb
 
 def acq_max(ac, gp, y_max, bounds, random_state, n_warmup=10000, n_iter=10):
     """
@@ -76,17 +76,17 @@ class UtilityFunction(object):
     An object to compute the acquisition functions.
     """
 
-    def __init__(self, kind, kappa, xi, kappa_decay=1, kappa_decay_delay=0):
+    def __init__(self, kind, kappa, xi, kappa_decay=1, kappa_decay_delay=0, pruned=[]):
 
         self.kappa = kappa
         self._kappa_decay = kappa_decay
         self._kappa_decay_delay = kappa_decay_delay
 
         self.xi = xi
-        
+        self.pruned = pruned 
         self._iters_counter = 0
 
-        if kind not in ['ucb', 'ei', 'poi']:
+        if kind not in ['ucb', 'ei', 'poi', 'ei_prune']:
             err = "The utility function " \
                   "{} has not been implemented, " \
                   "please choose one of ucb, ei, or poi.".format(kind)
@@ -107,6 +107,8 @@ class UtilityFunction(object):
             return self._ei(x, gp, y_max, self.xi)
         if self.kind == 'poi':
             return self._poi(x, gp, y_max, self.xi)
+        if self.kind == 'ei_prune':
+            return self._ei_prune(x, gp, y_max, self.xi, self.pruned)
 
     @staticmethod
     def _ucb(x, gp, kappa):
@@ -125,6 +127,24 @@ class UtilityFunction(object):
         a = (mean - y_max - xi)
         z = a / std
         return a * norm.cdf(z) + std * norm.pdf(z)
+
+    @staticmethod 
+    def _ei_prune(x, gp, y_max, xi, pruned):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mean, std = gp.predict(x, return_std=True)
+  
+        a = (mean - y_max - xi)
+        z = a / std
+        inter = a * norm.cdf(z) + std * norm.pdf(z)
+        mask = []
+        for val in np.round(x):
+            if val.tolist() in pruned:
+                mask.append(0)
+            else:
+                mask.append(1)
+        mask = np.array(mask)
+        return inter * mask
 
     @staticmethod
     def _poi(x, gp, y_max, xi):

@@ -239,7 +239,7 @@ class BayesianOptimization(Observable):
         self._gp = GaussianProcessRegressor(
             kernel=Matern(nu=2.5),
             alpha=1e-6,
-            normalize_y=False,
+            normalize_y=True,
             n_restarts_optimizer=0,
             random_state=self._random_state,
         )
@@ -255,7 +255,7 @@ class BayesianOptimization(Observable):
             except (AttributeError, TypeError):
                 raise TypeError('The transformer must be an instance of '
                                 'DomainTransformer')
-
+        self._pruned = []
         super(BayesianOptimization, self).__init__(events=DEFAULT_EVENTS)
 
     @property
@@ -270,10 +270,11 @@ class BayesianOptimization(Observable):
     def res(self):
         return self._space.res()
 
-    def register(self, params, target):
+    def register(self, params, target): # this function is not called, unless called manually
         """Expect observation with known target"""
         self._space.register(params, target)
-        self.dispatch(Events.OPTIMIZATION_STEP)
+#        pdb.set_trace()
+#        self.dispatch(Events.OPTIMIZATION_STEP)
 
     def probe(self, params, lazy=True):
         """
@@ -380,12 +381,12 @@ class BayesianOptimization(Observable):
         self.dispatch(Events.OPTIMIZATION_START)
         self._prime_queue(init_points)
         self.set_gp_params(**gp_params)
-
         util = UtilityFunction(kind=acq,
                                kappa=kappa,
                                xi=xi,
                                kappa_decay=kappa_decay,
-                               kappa_decay_delay=kappa_decay_delay)
+                               kappa_decay_delay=kappa_decay_delay,
+                               pruned = self._pruned)
         iteration = 0
         while not self._queue.empty or iteration < n_iter:
             try:
